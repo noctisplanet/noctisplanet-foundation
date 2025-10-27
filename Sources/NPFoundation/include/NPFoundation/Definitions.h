@@ -74,26 +74,4 @@
 #define NP_NAMESPACE_BEGIN(NAME) namespace NAME {
 #define NP_NAMESPACE_END }
 
-#ifdef __cplusplus
-
-NP_NAMESPACE_BEGIN(NP)
-
-// Mix-in for classes that must not be copied.
-class Nocopy {
-  
-private:
-    
-    Nocopy(const Nocopy&) = delete;
-    const Nocopy& operator=(const Nocopy&) = delete;
-    
-protected:
-    
-    constexpr Nocopy() = default;
-    ~Nocopy() = default;
-};
-
-NP_NAMESPACE_END
-
-#endif /* __cplusplus */
-
 #endif /* NP_DEFINITION_H */

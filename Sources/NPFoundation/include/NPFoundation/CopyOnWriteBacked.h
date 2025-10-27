@@ -31,6 +31,7 @@
 #include <atomic>
 #include <forward_list>
 #include <NPFoundation/Definitions.h>
+#include <NPFoundation/Mixable.h>
 
 NP_NAMESPACE_BEGIN(NP)
 
@@ -41,11 +42,11 @@ private:
     
     struct Block: Nocopy {
         
-        T *pointer;
+        T *element;
         
         mutable std::atomic<uint32_t> retainCount;
         
-        explicit Block(T *pointer) : retainCount(1), pointer(pointer) {
+        explicit Block(T *element) : retainCount(1), element(element) {
             
         }
         
@@ -58,13 +59,9 @@ private:
             this->retainCount.fetch_sub(1);
             uint32_t rc = this->retainCount.load();
             if (rc == 0) {
-                delete this->pointer;
+                delete this->element;
                 delete this;
             }
-        }
-        
-        T* get() const noexcept {
-            return this->pointer;
         }
     };
     
@@ -74,7 +71,7 @@ private:
     
 public:
     
-    explicit CopyOnWriteBacked(T *pointer) : block(new Block(pointer)) {
+    explicit CopyOnWriteBacked(T *element) : block(new Block(element)) {
         
     }
     
@@ -100,21 +97,21 @@ public:
         return this->block->retainCount.load(std::memory_order_relaxed);
     }
     
-    const T * get() const {
-        return this->block->get();
-    }
-    
     const T * operator->() const {
-        return this->block->get();
+        return this->block->element;
     }
     
-    T * acquireUnique() {
+    const T * read() const {
+        return this->block->element;
+    }
+    
+    T * unique() {
         if (this->retainCount() > 1) {
-            T *pointer = new T(*this->block->get());
+            T *element = new T(*this->block->element);
             this->block->release();
-            this->block = new Block(pointer);
+            this->block = new Block(element);
         }
-        return this->block->get();
+        return this->block->element;
     }
 };
 

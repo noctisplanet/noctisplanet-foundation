@@ -1,8 +1,8 @@
 //
-//  NPFoundation.h
+//  Mixable.h
 //  npfoundation
 //
-//  Created by Jonathan Lee on 5/6/25.
+//  Created by Jonathan Lee on 10/27/25.
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -23,13 +23,31 @@
 //  SOFTWARE.
 //
 
-#include <NPFoundation/ByteBuffer.h>
-#include <NPFoundation/CopyOnWriteBacked.h>
-#include <NPFoundation/Definitions.h>
-#include <NPFoundation/Diagnostics.h>
-#include <NPFoundation/dispatch.h>
-#include <NPFoundation/machine.h>
-#include <NPFoundation/Mixable.h>
-#include <NPFoundation/objc.h>
-#include <NPFoundation/DataStructures.h>
-#include <NPFoundation/sys.h>
+#ifndef NP_MIXABLE_H
+#define NP_MIXABLE_H
+
+#ifdef __cplusplus
+
+NP_NAMESPACE_BEGIN(NP)
+
+// Mix-in for classes that must not be copied.
+class Nocopy {
+  
+private:
+    
+    Nocopy(const Nocopy&) = delete;
+    
+    const Nocopy& operator=(const Nocopy&) = delete;
+    
+protected:
+    
+    constexpr Nocopy() = default;
+    
+    ~Nocopy() = default;
+};
+
+NP_NAMESPACE_END
+
+#endif /* __cplusplus */
+
+#endif /* NP_MIXABLE_H */
