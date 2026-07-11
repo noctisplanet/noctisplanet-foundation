@@ -23,14 +23,6 @@
 //  SOFTWARE.
 //
 
+// A plain C++ translation unit, compiled without ARC: including the umbrella header here is what
+// keeps the public headers honest about being usable from outside Objective-C.
 #include <NPFoundation/NPFoundation.h>
-
-#include <type_traits>
-
-// This translation unit is the one that matters for the check below: plain C++, no ARC. A struct
-// with retainable fields is trivially copyable here but *not* under ARC, and clang passes the two
-// differently — a non-trivial C struct is returned indirectly. Keeping NPScheduleWork trivial
-// everywhere is what lets an ARC implementation and a non-ARC caller agree on the ABI.
-static_assert(std::is_trivially_copyable<NPScheduleWork>::value,
-              "NPScheduleWork must stay trivially copyable so that ARC and non-ARC translation "
-              "units agree on how to pass it");

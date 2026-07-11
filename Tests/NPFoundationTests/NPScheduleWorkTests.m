@@ -46,41 +46,39 @@
 - (void)testThrottleFiresOncePerWindow {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled"];
-    NPScheduleWork work;
-    NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWorkRef work = NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    }, &work);
+    });
 
-    work.resume();
-    work.resume();
-    work.resume();
-    work.resume();
+    NPScheduleWorkResume(work);
+    NPScheduleWorkResume(work);
+    NPScheduleWorkResume(work);
+    NPScheduleWorkResume(work);
     [self waitForExpectations:@[expectation] timeout:5];
 
     // The window is still open, so the burst above must have produced exactly one call.
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
 - (void)testThrottleFiresAgainAfterTheWindow {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled twice"];
     expectation.expectedFulfillmentCount = 2;
-    NPScheduleWork work;
-    NPDispatchScheduleThrottle(0.2, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWorkRef work = NPDispatchScheduleThrottle(0.2, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    }, &work);
+    });
 
-    work.resume();
-    work.resume();
+    NPScheduleWorkResume(work);
+    NPScheduleWorkResume(work);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        work.resume();
+        NPScheduleWorkResume(work);
     });
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 2);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
 #pragma mark - Debounce
@@ -88,14 +86,13 @@
 - (void)testDebounceFiresOnceForABurst {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"debounced"];
-    NPScheduleWork work;
-    NPDispatchScheduleDebounce(0.2, 0.05, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWorkRef work = NPDispatchScheduleDebounce(0.2, 0.05, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    }, &work);
+    });
 
     for (int idx = 0; idx < 8; idx ++) {
-        work.resume();
+        NPScheduleWorkResume(work);
     }
     [self waitForExpectations:@[expectation] timeout:5];
 
@@ -103,54 +100,48 @@
     // burst a chance to fire before checking the count.
     [self settleFor:0.5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
 - (void)testDebounceCancel {
     NP_BLOCK(int) count = 0;
-    NPScheduleWork work;
-    NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWorkRef work = NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
-    }, &work);
+    });
 
-    work.resume();
-    work.cancel();
+    NPScheduleWorkResume(work);
+    NPScheduleWorkCancel(work);
     [self settleFor:0.6];
     XCTAssertEqual(count, 0);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
 - (void)testDebounceResumesAfterCancel {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"debounced"];
-    NPScheduleWork work;
-    NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWorkRef work = NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    }, &work);
+    });
 
-    work.resume();
-    work.cancel();
-    work.resume();
+    NPScheduleWorkResume(work);
+    NPScheduleWorkCancel(work);
+    NPScheduleWorkResume(work);
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
 #pragma mark - Lifetime
 
-- (void)testReleaseClearsTheHandle {
-    NPScheduleWork work;
-    NPDispatchScheduleThrottle(1, dispatch_get_main_queue(), ^{}, &work);
-    XCTAssertTrue(work.resume != NULL);
-    XCTAssertTrue(work.cancel != NULL);
+- (void)testTheHandleIsUsable {
+    NPScheduleWorkRef work = NPDispatchScheduleThrottle(1, dispatch_get_main_queue(), ^{});
+    XCTAssertTrue(work != NULL);
+    NPScheduleWorkRelease(work);
 
-    NPScheduleWorkRelease(&work);
-    XCTAssertTrue(work.resume == NULL);
-    XCTAssertTrue(work.cancel == NULL);
-
-    // Releasing an already-released or NULL handle is a no-op rather than a double free.
-    NPScheduleWorkRelease(&work);
+    // A NULL handle is inert rather than a crash, whichever way it is used.
+    NPScheduleWorkResume(NULL);
+    NPScheduleWorkCancel(NULL);
     NPScheduleWorkRelease(NULL);
 }
 
@@ -159,20 +150,19 @@
 - (void)testHandleOutlivesTheSchedulingFrame {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled"];
-    NPScheduleWork work;
-    [self scheduleInto:&work counter:&count expectation:expectation];
+    NPScheduleWorkRef work = [self scheduleWithCounter:&count expectation:expectation];
 
-    work.resume();
+    NPScheduleWorkResume(work);
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(work);
 }
 
-- (void)scheduleInto:(NPScheduleWork *)work counter:(int *)counter expectation:(XCTestExpectation *)expectation {
-    NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+- (NPScheduleWorkRef)scheduleWithCounter:(int *)counter expectation:(XCTestExpectation *)expectation {
+    return NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         *counter += 1;
         [expectation fulfill];
-    }, work);
+    });
 }
 
 @end

@@ -25,7 +25,15 @@
 
 #include <NPFoundation/dispatch.h>
 #include <Foundation/Foundation.h>
+#include <stdlib.h>
 #include <time.h>
+
+/// The private layout behind NPScheduleWorkRef: the two blocks a schedule is driven by. They are
+/// strong, and the handle is heap-allocated, so the blocks live exactly as long as it does.
+struct NPScheduleWork {
+    dispatch_block_t resume;
+    dispatch_block_t cancel;
+};
 
 /// A monotonic clock: unlike CFAbsoluteTimeGetCurrent(), it cannot jump backwards when the wall
 /// clock is adjusted, which would otherwise let a throttle stall for the length of the jump.
@@ -33,35 +41,44 @@ NP_STATIC_INLINE double monotonicSeconds(void) {
     return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC) / (double)NSEC_PER_SEC;
 }
 
-/// Copies `block` to the heap and hands the ownership of that copy to the caller, since the fields
-/// of NPScheduleWork are outside ARC's reach. NPScheduleWorkRelease gives it back.
-NP_STATIC_INLINE dispatch_block_t retainedBlock(dispatch_block_t block) {
-    return (__bridge dispatch_block_t)(__bridge_retained void *)[block copy];
-}
-
-/// Hands an owned block back to ARC, which releases it at the end of this scope.
-NP_STATIC_INLINE void releaseBlock(dispatch_block_t block) {
-    if (block == NULL) {
-        return;
+/// Allocates a handle around a pair of blocks. The memory is zeroed before anything is stored in it,
+/// which is what lets ARC manage the two strong fields of a struct it did not construct itself.
+NP_STATIC_INLINE NPScheduleWorkRef makeScheduleWork(dispatch_block_t resume, dispatch_block_t cancel) {
+    NPScheduleWorkRef work = (NPScheduleWorkRef)calloc(1, sizeof(struct NPScheduleWork));
+    if (work == NULL) {
+        return NULL;
     }
-    dispatch_block_t owned = (__bridge_transfer dispatch_block_t)(__bridge void *)block;
-    (void)owned;
+    work->resume = resume;
+    work->cancel = cancel;
+    return work;
 }
 
-void NPScheduleWorkRelease(NPScheduleWork *work) {
+void NPScheduleWorkResume(NPScheduleWorkRef work) {
     if (work == NULL) {
         return;
     }
-    releaseBlock(work->resume);
-    releaseBlock(work->cancel);
-    work->resume = NULL;
-    work->cancel = NULL;
+    work->resume();
 }
 
-void NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work) {
+void NPScheduleWorkCancel(NPScheduleWorkRef work) {
     if (work == NULL) {
         return;
     }
+    work->cancel();
+}
+
+void NPScheduleWorkRelease(NPScheduleWorkRef work) {
+    if (work == NULL) {
+        return;
+    }
+    // Clearing the fields is what releases the blocks: free() alone would leak them, since it knows
+    // nothing about the ownership ARC gave the struct.
+    work->resume = nil;
+    work->cancel = nil;
+    free(work);
+}
+
+NPScheduleWorkRef NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback) {
     NP_BLOCK(double) previous = 0;
     NP_BLOCK(bool) hasFired = false;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
@@ -74,19 +91,15 @@ void NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, disp
             dispatch_async(on, callback);
         }
     };
-    work->resume = retainedBlock(^{
+    return makeScheduleWork(^{
         dispatch_async(queue, resume);
-    });
-    work->cancel = retainedBlock(^{
-        // Nothing to cancel: the throttled callback has already been dispatched by the time
-        // resume() returns, or it was dropped.
+    }, ^{
+        // Nothing to cancel: the throttled callback has already been dispatched by the time the
+        // resume returns, or it was dropped.
     });
 }
 
-void NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work) {
-    if (work == NULL) {
-        return;
-    }
+NPScheduleWorkRef NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback) {
     NP_BLOCK(bool) canceled = false;
     NP_BLOCK(uint64_t) generation = 0;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
@@ -115,10 +128,9 @@ void NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, d
     dispatch_block_t cancel = ^{
         canceled = true;
     };
-    work->resume = retainedBlock(^{
+    return makeScheduleWork(^{
         dispatch_async(queue, resume);
-    });
-    work->cancel = retainedBlock(^{
+    }, ^{
         dispatch_async(queue, cancel);
     });
 }
