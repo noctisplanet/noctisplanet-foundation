@@ -51,15 +51,15 @@
         [expectation fulfill];
     });
 
-    NPScheduleWorkResume(work);
-    NPScheduleWorkResume(work);
-    NPScheduleWorkResume(work);
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
+    NPScheduleWorkSignal(work);
+    NPScheduleWorkSignal(work);
+    NPScheduleWorkSignal(work);
     [self waitForExpectations:@[expectation] timeout:5];
 
     // The window is still open, so the burst above must have produced exactly one call.
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
 - (void)testThrottleFiresAgainAfterTheWindow {
@@ -71,14 +71,14 @@
         [expectation fulfill];
     });
 
-    NPScheduleWorkResume(work);
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
+    NPScheduleWorkSignal(work);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        NPScheduleWorkResume(work);
+        NPScheduleWorkSignal(work);
     });
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 2);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
 #pragma mark - Debounce
@@ -92,7 +92,7 @@
     });
 
     for (int idx = 0; idx < 8; idx ++) {
-        NPScheduleWorkResume(work);
+        NPScheduleWorkSignal(work);
     }
     [self waitForExpectations:@[expectation] timeout:5];
 
@@ -100,7 +100,7 @@
     // burst a chance to fire before checking the count.
     [self settleFor:0.5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
 - (void)testDebounceCancel {
@@ -109,14 +109,14 @@
         count += 1;
     });
 
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
     NPScheduleWorkCancel(work);
     [self settleFor:0.6];
     XCTAssertEqual(count, 0);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
-- (void)testDebounceResumesAfterCancel {
+- (void)testDebounceSignalsAfterCancel {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"debounced"];
     NPScheduleWorkRef work = NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
@@ -124,12 +124,12 @@
         [expectation fulfill];
     });
 
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
     NPScheduleWorkCancel(work);
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
 #pragma mark - Lifetime
@@ -137,12 +137,12 @@
 - (void)testTheHandleIsUsable {
     NPScheduleWorkRef work = NPDispatchScheduleThrottle(1, dispatch_get_main_queue(), ^{});
     XCTAssertTrue(work != NULL);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 
     // A NULL handle is inert rather than a crash, whichever way it is used.
-    NPScheduleWorkResume(NULL);
+    NPScheduleWorkSignal(NULL);
     NPScheduleWorkCancel(NULL);
-    NPScheduleWorkRelease(NULL);
+    NPScheduleWorkFree(NULL);
 }
 
 /// The callback must stay alive as long as the handle does, even after the frame that created it
@@ -152,10 +152,10 @@
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled"];
     NPScheduleWorkRef work = [self scheduleWithCounter:&count expectation:expectation];
 
-    NPScheduleWorkResume(work);
+    NPScheduleWorkSignal(work);
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 1);
-    NPScheduleWorkRelease(work);
+    NPScheduleWorkFree(work);
 }
 
 - (NPScheduleWorkRef)scheduleWithCounter:(int *)counter expectation:(XCTestExpectation *)expectation {

@@ -206,36 +206,38 @@ NPDispatchTimerObservable(observable, nil, 1, 0, ^{
 
 ## Throttle and debounce
 
-Both return an `NPScheduleWorkRef`, an opaque handle you drive with `NPScheduleWorkResume` and
-`NPScheduleWorkCancel`. Ownership of the handle is yours, so release it when you are done. Throttle
-runs the callback at most once per window (cancelling has no effect, since the work already ran);
-debounce delays the callback until the calls stop, so cancelling can still call it off.
+Both return an `NPScheduleWorkRef`, an opaque handle you drive with `NPScheduleWorkSignal` and
+`NPScheduleWorkCancel`. Signal it once per event you want the callback to answer, and the schedule
+decides how many of those signals reach it. Ownership of the handle is yours, so free it when you are
+done — it is not reference counted, so that is one `NPScheduleWorkFree` per handle. Throttle runs the
+callback at most once per window (cancelling has no effect, since the work already ran); debounce
+delays the callback until the signals stop, so cancelling can still call it off.
 
 ```Objective-C
 NPScheduleWorkRef throttled = NPDispatchScheduleThrottle(0.5, queue, ^{ /* task */ });
-NPScheduleWorkResume(throttled);
-NPScheduleWorkRelease(throttled);
+NPScheduleWorkSignal(throttled);
+NPScheduleWorkFree(throttled);
 
 NPScheduleWorkRef debounced = NPDispatchScheduleDebounce(0.5, 0, queue, ^{ /* task */ });
-NPScheduleWorkResume(debounced);
+NPScheduleWorkSignal(debounced);
 NPScheduleWorkCancel(debounced);
-NPScheduleWorkRelease(debounced);
+NPScheduleWorkFree(debounced);
 ```
 
 The same from Swift, where the handle imports as `NPScheduleWorkRef?`:
 
 ```Swift
 let throttled = NPDispatchScheduleThrottle(0.5, queue, { /* task */ })
-NPScheduleWorkResume(throttled)
-NPScheduleWorkRelease(throttled)
+NPScheduleWorkSignal(throttled)
+NPScheduleWorkFree(throttled)
 ```
 
 The handle is opaque on purpose. Its layout is a pair of blocks, and a struct with block fields is
 non-trivial under ARC but trivial without it — the two disagree on how to pass it, and Swift's C
 importer refuses to import it at all. Behind a pointer, none of that reaches the caller. Since the
-blocks are owned by the handle rather than by ARC, they need an explicit `NPScheduleWorkRelease`.
-Resume and cancel are safe to call from any thread; releasing is not, so make sure nothing else
-still holds the handle.
+blocks are owned by the handle rather than by ARC, they need an explicit `NPScheduleWorkFree`.
+Signalling and cancelling are safe from any thread; freeing is not, so make sure nothing else still
+holds the handle.
 
 # Objective-C runtime
 

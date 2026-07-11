@@ -31,7 +31,7 @@
 /// The private layout behind NPScheduleWorkRef: the two blocks a schedule is driven by. They are
 /// strong, and the handle is heap-allocated, so the blocks live exactly as long as it does.
 struct NPScheduleWork {
-    dispatch_block_t resume;
+    dispatch_block_t signal;
     dispatch_block_t cancel;
 };
 
@@ -43,21 +43,21 @@ NP_STATIC_INLINE double monotonicSeconds(void) {
 
 /// Allocates a handle around a pair of blocks. The memory is zeroed before anything is stored in it,
 /// which is what lets ARC manage the two strong fields of a struct it did not construct itself.
-NP_STATIC_INLINE NPScheduleWorkRef makeScheduleWork(dispatch_block_t resume, dispatch_block_t cancel) {
+NP_STATIC_INLINE NPScheduleWorkRef makeScheduleWork(dispatch_block_t signal, dispatch_block_t cancel) {
     NPScheduleWorkRef work = (NPScheduleWorkRef)calloc(1, sizeof(struct NPScheduleWork));
     if (work == NULL) {
         return NULL;
     }
-    work->resume = resume;
+    work->signal = signal;
     work->cancel = cancel;
     return work;
 }
 
-void NPScheduleWorkResume(NPScheduleWorkRef work) {
+void NPScheduleWorkSignal(NPScheduleWorkRef work) {
     if (work == NULL) {
         return;
     }
-    work->resume();
+    work->signal();
 }
 
 void NPScheduleWorkCancel(NPScheduleWorkRef work) {
@@ -67,13 +67,13 @@ void NPScheduleWorkCancel(NPScheduleWorkRef work) {
     work->cancel();
 }
 
-void NPScheduleWorkRelease(NPScheduleWorkRef work) {
+void NPScheduleWorkFree(NPScheduleWorkRef work) {
     if (work == NULL) {
         return;
     }
     // Clearing the fields is what releases the blocks: free() alone would leak them, since it knows
     // nothing about the ownership ARC gave the struct.
-    work->resume = nil;
+    work->signal = nil;
     work->cancel = nil;
     free(work);
 }
@@ -83,7 +83,7 @@ NPScheduleWorkRef NPDispatchScheduleThrottle(double delayInSeconds, dispatch_que
     NP_BLOCK(bool) hasFired = false;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
     dispatch_queue_t queue = dispatch_queue_create("com.dispatch.throttle-queue", attribute);
-    dispatch_block_t resume = ^{
+    dispatch_block_t onSignal = ^{
         double timestamp = monotonicSeconds();
         if (!hasFired || timestamp - previous >= delayInSeconds) {
             hasFired = true;
@@ -92,10 +92,10 @@ NPScheduleWorkRef NPDispatchScheduleThrottle(double delayInSeconds, dispatch_que
         }
     };
     return makeScheduleWork(^{
-        dispatch_async(queue, resume);
+        dispatch_async(queue, onSignal);
     }, ^{
         // Nothing to cancel: the throttled callback has already been dispatched by the time the
-        // resume returns, or it was dropped.
+        // signal returns, or it was dropped.
     });
 }
 
@@ -104,7 +104,7 @@ NPScheduleWorkRef NPDispatchScheduleDebounce(double delayInSeconds, double leewa
     NP_BLOCK(uint64_t) generation = 0;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
     dispatch_queue_t queue = dispatch_queue_create("com.dispatch.debounce-queue", attribute);
-    dispatch_block_t resume = ^{
+    dispatch_block_t onSignal = ^{
         canceled = false;
         uint64_t current = ++generation;
         // A one-shot timer source rather than dispatch_after(): dispatch_after() has no way to
@@ -117,20 +117,20 @@ NPScheduleWorkRef NPDispatchScheduleDebounce(double delayInSeconds, double leewa
         dispatch_source_set_event_handler(timer, ^{
             dispatch_source_cancel(timer);
             // Every state read here happens on the serial queue the source targets, so `generation`
-            // and `canceled` are stable. A newer resume() bumped the generation, and that newer
-            // timer is the one allowed to fire.
+            // and `canceled` are stable. A newer signal bumped the generation, and that newer timer
+            // is the one allowed to fire.
             if (!canceled && current == generation) {
                 dispatch_async(on, callback);
             }
         });
         dispatch_activate(timer);
     };
-    dispatch_block_t cancel = ^{
+    dispatch_block_t onCancel = ^{
         canceled = true;
     };
     return makeScheduleWork(^{
-        dispatch_async(queue, resume);
+        dispatch_async(queue, onSignal);
     }, ^{
-        dispatch_async(queue, cancel);
+        dispatch_async(queue, onCancel);
     });
 }

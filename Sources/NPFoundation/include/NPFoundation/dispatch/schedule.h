@@ -32,67 +32,69 @@
 
 NP_CEXTERN_BEGIN
 
-/// An opaque handle to a scheduled callback: NPScheduleWorkResume asks for the callback to run,
+/// An opaque handle to a scheduled callback: NPScheduleWorkSignal asks for the callback to run,
 /// NPScheduleWorkCancel calls it off.
 ///
 /// Create one with NPDispatchScheduleThrottle or NPDispatchScheduleDebounce, and hand it to
-/// NPScheduleWorkRelease when you are done with it. The layout is private: the handle owns whatever
-/// state the schedule needs, which is why it is passed around as a pointer and released explicitly
-/// rather than being reclaimed by ARC.
+/// NPScheduleWorkFree when you are done with it. The layout is private: the handle owns whatever
+/// state the schedule needs, which is why it is passed around as a pointer and freed explicitly
+/// rather than being reclaimed by ARC. It is not reference counted — one NPScheduleWorkFree per
+/// handle, no more.
 ///
-/// Resume and cancel may be called from any thread. Releasing is not thread-safe against them: a
-/// released handle is dangling, so make sure no other thread still holds it.
+/// Signalling and cancelling may be called from any thread. Freeing is not thread-safe against
+/// them: a freed handle is dangling, so make sure no other thread still holds it.
 typedef struct NPScheduleWork *NPScheduleWorkRef;
 
 /// Schedules a throttled execution of a callback on a dispatch queue.
 ///
 /// Throttling runs the callback at most once per delay window, no matter how many times the handle
-/// is resumed within it. The first resume runs the callback immediately.
+/// is signalled within it. The first signal runs the callback immediately.
 ///
 /// Cancelling does nothing for a throttle: by the time it could take effect, the callback has
 /// already been dispatched, or it was dropped.
 ///
 /// - Parameters:
-///   - delayInSeconds: The minimum delay (in seconds) between two callback executions. Resumes
+///   - delayInSeconds: The minimum delay (in seconds) between two callback executions. Signals
 ///                     within this window are ignored.
 ///   - on: The dispatch queue on which to execute the callback.
 ///   - callback: The callback to execute when the throttling condition is met.
-/// - Returns: The handle, or NULL if it could not be allocated. Release it with
-///            NPScheduleWorkRelease.
+/// - Returns: The handle, or NULL if it could not be allocated. Free it with
+///            NPScheduleWorkFree.
 NP_EXTERN NPScheduleWorkRef _Nullable NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t _Nonnull on, dispatch_block_t _Nonnull callback);
 
 /// Schedules a debounced execution of a callback on a dispatch queue.
 ///
-/// Debouncing delays the callback until `delayInSeconds` have passed with no further resume. A burst
-/// of resumes therefore collapses into a single execution.
+/// Debouncing delays the callback until `delayInSeconds` have passed with no further signal. A burst
+/// of signals therefore collapses into a single execution.
 ///
 /// Cancelling is effective for a debounce, since its work is always delayed: it calls off a pending
-/// execution. A later resume starts a new one.
+/// execution. A later signal starts a new one.
 ///
 /// - Parameters:
-///   - delayInSeconds: The quiet period (in seconds) that must pass after the last resume before the
+///   - delayInSeconds: The quiet period (in seconds) that must pass after the last signal before the
 ///                     callback runs.
 ///   - leewayInSeconds: The tolerance (in seconds) the system may add to the timer to save power.
 ///   - on: The dispatch queue on which to execute the callback.
 ///   - callback: The callback to execute when the debounce condition is met.
-/// - Returns: The handle, or NULL if it could not be allocated. Release it with
-///            NPScheduleWorkRelease.
+/// - Returns: The handle, or NULL if it could not be allocated. Free it with
+///            NPScheduleWorkFree.
 NP_EXTERN NPScheduleWorkRef _Nullable NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t _Nonnull on, dispatch_block_t _Nonnull callback);
 
 /// Asks for the scheduled callback to run, subject to the throttle or debounce condition of the
-/// handle. Resuming a NULL handle does nothing.
-NP_EXTERN void NPScheduleWorkResume(NPScheduleWorkRef _Nullable work);
+/// handle. Signal it once per event you want the callback to answer; signalling a NULL handle does
+/// nothing.
+NP_EXTERN void NPScheduleWorkSignal(NPScheduleWorkRef _Nullable work);
 
 /// Calls off a callback the handle has not run yet, and does nothing for a throttle or for a NULL
-/// handle. A later resume schedules the callback again.
+/// handle. A later signal schedules the callback again.
 NP_EXTERN void NPScheduleWorkCancel(NPScheduleWorkRef _Nullable work);
 
-/// Releases a schedule handle. Releasing a NULL handle does nothing, and the handle must not be
-/// used — resumed, cancelled or released again — afterwards.
+/// Frees a schedule handle. Freeing a NULL handle does nothing, and the handle must not be used —
+/// signalled, cancelled or freed again — afterwards.
 ///
 /// This does not call off a debounce that is already pending: cancel it first if the callback must
 /// not run.
-NP_EXTERN void NPScheduleWorkRelease(NPScheduleWorkRef _Nullable work);
+NP_EXTERN void NPScheduleWorkFree(NPScheduleWorkRef _Nullable work);
 
 NP_CEXTERN_END
 
