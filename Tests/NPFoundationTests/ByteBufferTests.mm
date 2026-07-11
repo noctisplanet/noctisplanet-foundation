@@ -1,5 +1,5 @@
 //
-//  CopyOnWriteBackedTests.mm
+//  ByteBufferTests.mm
 //  npfoundation
 //
 //  Created by Jonathan Lee on 10/27/25.
@@ -36,10 +36,20 @@ using namespace NP;
 
 @implementation ByteBufferTests
 
+#pragma mark - Storage
+
 - (void)testAllocate {
     ByteBufferStorage storage{_allocator, 0};
     XCTAssertEqual(1, storage.getCapacity());
-    storage.reallocated(1024);
+    XCTAssertTrue(storage.reserve(1024));
+    XCTAssertEqual(1024, storage.getCapacity());
+}
+
+- (void)testReserveRoundsUpAndNeverShrinks {
+    ByteBufferStorage storage{_allocator, 0};
+    XCTAssertTrue(storage.reserve(1000));
+    XCTAssertEqual(1024, storage.getCapacity());
+    XCTAssertTrue(storage.reserve(8));
     XCTAssertEqual(1024, storage.getCapacity());
 }
 
@@ -47,44 +57,116 @@ using namespace NP;
     NP::Size atIndex = 0;
     ByteBufferStorage storage{_allocator, 0};
     {
-        Bytes bytes = (Bytes)"hello world!";
-        storage.setBytes(bytes, strlen((char *)bytes), atIndex);
+        const char *text = "hello world!";
+        storage.setBytes((ConstBytes)text, strlen(text), atIndex);
         XCTAssertEqual(16, storage.getCapacity());
-        XCTAssertEqual(0, strncmp((char *)bytes, (char *)storage.getBytes(), strlen((char *)bytes)));
-        atIndex += strlen((char *)bytes);
+        XCTAssertEqual(0, strncmp(text, (char *)storage.getBytes(), strlen(text)));
+        atIndex += strlen(text);
     }
     {
-        Bytes bytes = (Bytes)"Hello World!";
-        storage.setBytes(bytes, strlen((char *)bytes), atIndex);
+        const char *text = "Hello World!";
+        storage.setBytes((ConstBytes)text, strlen(text), atIndex);
         XCTAssertEqual(32, storage.getCapacity());
-        XCTAssertEqual(0, strncmp((char *)bytes, (char *)storage.getBytes() + atIndex, strlen((char *)bytes)));
+        XCTAssertEqual(0, strncmp(text, (char *)storage.getBytes() + atIndex, strlen(text)));
     }
 }
 
-- (void)testSimpleWritesAndReadTest {
-    Bytes bytes = _allocator.allocate(1024);
+- (void)testStorageCopyKeepsSourceIntact {
+    ByteBufferStorage storage{_allocator, 16};
+    const char *text = "hello world!";
+    storage.setBytes((ConstBytes)text, strlen(text), 0);
+
+    ByteBufferStorage copied{storage};
+    XCTAssertNotEqual(storage.getBytes(), copied.getBytes());
+    XCTAssertEqual(storage.getCapacity(), copied.getCapacity());
+    XCTAssertEqual(0, strncmp(text, (char *)storage.getBytes(), strlen(text)));
+    XCTAssertEqual(0, strncmp(text, (char *)copied.getBytes(), strlen(text)));
+}
+
+#pragma mark - Writing
+
+- (void)testSimpleWrites {
     auto buffer = _allocator.buffer(1024);
-    auto written = buffer.writeBytes(bytes, 1024);
-    auto writableBytes = buffer.writableBytes();
-    XCTAssertEqual(1024, buffer.readableBytes());
+    XCTAssertEqual(1024, buffer.capacity());
+    XCTAssertEqual(1024, buffer.writableBytes());
+    XCTAssertEqual(0, buffer.readableBytes());
+
+    auto written = buffer.writeString(std::string(1024, 'a'));
     XCTAssertEqual(1024, written);
-    
-    written = buffer.writeCString("");
-    writableBytes = buffer.writableBytes();
     XCTAssertEqual(1024, buffer.readableBytes());
+    XCTAssertEqual(0, buffer.writableBytes());
+
+    written = buffer.writeCString("");
     XCTAssertEqual(0, written);
-    
+    XCTAssertEqual(1024, buffer.readableBytes());
+
     written = buffer.writeCString("X");
-    writableBytes = buffer.writableBytes();
-    XCTAssertEqual(1025, buffer.readableBytes());
     XCTAssertEqual(1, written);
-    
+    XCTAssertEqual(1025, buffer.readableBytes());
+    XCTAssertEqual(2048, buffer.capacity());
+
     written = buffer.writeCString("XXXXX");
-    writableBytes = buffer.writableBytes();
-    XCTAssertEqual(1030, buffer.readableBytes());
     XCTAssertEqual(5, written);
-    
-    _allocator.deallocate(bytes, 1024);
+    XCTAssertEqual(1030, buffer.readableBytes());
+    XCTAssertEqual(2048, buffer.capacity());
+}
+
+#pragma mark - Reading
+
+- (void)testReadAndSkip {
+    auto buffer = _allocator.buffer(0);
+    buffer.writeCString("hello world!");
+    XCTAssertEqual(12, buffer.readableBytes());
+
+    XCTAssertEqual("hello", buffer.readString(5));
+    XCTAssertEqual(7, buffer.readableBytes());
+
+    XCTAssertEqual(1, buffer.skipBytes(1));
+    XCTAssertEqual(6, buffer.readableBytes());
+
+    uint8_t destination[16] = {0};
+    XCTAssertEqual(6, buffer.readBytes(destination, sizeof(destination)));
+    XCTAssertEqual(0, strcmp("world!", (char *)destination));
+    XCTAssertEqual(0, buffer.readableBytes());
+    XCTAssertEqual(0, buffer.readBytes(destination, sizeof(destination)));
+}
+
+- (void)testDiscardReadBytes {
+    auto buffer = _allocator.buffer(16);
+    buffer.writeCString("hello world!");
+    buffer.skipBytes(6);
+    XCTAssertEqual(6, buffer.getReaderIndex());
+
+    buffer.discardReadBytes();
+    XCTAssertEqual(0, buffer.getReaderIndex());
+    XCTAssertEqual(6, buffer.getWriterIndex());
+    XCTAssertEqual(6, buffer.readableBytes());
+    XCTAssertEqual("world!", buffer.readString(6));
+}
+
+- (void)testClear {
+    auto buffer = _allocator.buffer(16);
+    buffer.writeCString("hello");
+    buffer.clear();
+    XCTAssertEqual(0, buffer.readableBytes());
+    XCTAssertEqual(16, buffer.writableBytes());
+}
+
+#pragma mark - Copy on write
+
+- (void)testCopiedBufferSharesStorageUntilWritten {
+    auto buffer = _allocator.buffer(16);
+    buffer.writeCString("hello");
+
+    auto copied = buffer;
+    XCTAssertEqual(buffer.bytes(), copied.bytes());
+
+    copied.writeCString("!");
+    XCTAssertNotEqual(buffer.bytes(), copied.bytes());
+    XCTAssertEqual(5, buffer.readableBytes());
+    XCTAssertEqual(6, copied.readableBytes());
+    XCTAssertEqual("hello", buffer.readString(5));
+    XCTAssertEqual("hello!", copied.readString(6));
 }
 
 @end

@@ -28,6 +28,8 @@
 
 #ifdef __cplusplus
 
+#include <NPFoundation/Definitions.h>
+
 NP_NAMESPACE_BEGIN(NP)
 
 // Mix-in for classes that must not be copied.

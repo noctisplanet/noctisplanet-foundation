@@ -15,8 +15,10 @@ Pod::Spec.new do |spec|
 
     spec.static_framework = true
     spec.frameworks                     = 'Foundation'
+    spec.libraries                      = 'c++'
+    spec.pod_target_xcconfig            = { 'CLANG_CXX_LANGUAGE_STANDARD' => 'c++20' }
 
-    spec.source_files                   = 'Sources/NPFoundation/**/*.{h,c,m}'
+    spec.source_files                   = 'Sources/NPFoundation/**/*.{h,c,m,cpp,mm}'
     spec.public_header_files            = 'Sources/NPFoundation/include/**/*.{h}'
     spec.module_map                     = 'Sources/NPFoundation/NPFoundation.modulemap'
 end
