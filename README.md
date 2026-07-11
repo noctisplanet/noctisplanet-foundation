@@ -206,18 +206,30 @@ NPDispatchTimerObservable(observable, nil, 1, 0, ^{
 
 ## Throttle and debounce
 
-Both return an `NPScheduleWork` — a pair of `resume` / `cancel` blocks. Throttle runs the callback
-at most once per window (`cancel` has no effect, since the work already ran); debounce delays the
-callback until the calls stop, so `cancel` can still call it off.
+Both fill in an `NPScheduleWork` handle — a pair of `resume` / `cancel` blocks — and both hand
+ownership of that handle to you, so release it when you are done. Throttle runs the callback at most
+once per window (`cancel` has no effect, since the work already ran); debounce delays the callback
+until the calls stop, so `cancel` can still call it off.
 
 ```Objective-C
-NPScheduleWork throttled = NPDispatchScheduleThrottle(0.5, queue, ^{ /* task */ });
+NPScheduleWork throttled;
+NPDispatchScheduleThrottle(0.5, queue, ^{ /* task */ }, &throttled);
 throttled.resume();
+NPScheduleWorkRelease(&throttled);
 
-NPScheduleWork debounced = NPDispatchScheduleDeboundce(0.5, 0, queue, ^{ /* task */ });
+NPScheduleWork debounced;
+NPDispatchScheduleDebounce(0.5, 0, queue, ^{ /* task */ }, &debounced);
 debounced.resume();
 debounced.cancel();
+NPScheduleWorkRelease(&debounced);
 ```
+
+The handle is an out-parameter rather than a return value on purpose. Returning it by value would
+mean returning a struct with block fields, and ARC makes such a struct non-trivial and returns it
+indirectly, while a translation unit compiled without ARC expects it in registers — the two
+disagree on the ABI. Passing it by pointer sidesteps that, and the fields are declared
+`__unsafe_unretained` so the struct stays trivially copyable everywhere. That is also why the blocks
+need an explicit `NPScheduleWorkRelease` instead of being reclaimed by ARC.
 
 # Objective-C runtime
 

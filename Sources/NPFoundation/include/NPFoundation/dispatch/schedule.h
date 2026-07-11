@@ -32,42 +32,61 @@
 
 NP_CEXTERN_BEGIN
 
+/// A handle to a scheduled callback: `resume` asks for the callback to run, `cancel` calls it off.
+///
+/// The two blocks are owned by the handle, not by ARC, which is what keeps the struct trivially
+/// copyable in every translation unit. Fill one in with NPDispatchScheduleThrottle or
+/// NPDispatchScheduleDebounce, and hand it to NPScheduleWorkRelease when you are done with it.
+///
+/// A handle is not thread-safe to fill in or release concurrently, but `resume` and `cancel` may be
+/// called from any thread once it has been filled in.
 struct NPScheduleWork {
-    dispatch_block_t resume;
-    dispatch_block_t cancel;
+    NP_UNRETAINED dispatch_block_t resume;
+    NP_UNRETAINED dispatch_block_t cancel;
 };
 typedef struct NPScheduleWork NPScheduleWork;
 
-/// Schedules a throttled execution of a callback function on a specified dispatch queue.
+/// Schedules a throttled execution of a callback on a dispatch queue.
 ///
-/// Throttling ensures the callback is executed at most once within the specified delay period,
-/// regardless of how many times the returned NPScheduleWork function is called.
+/// Throttling runs the callback at most once per delay window, no matter how many times `resume` is
+/// called within it. The first `resume` runs the callback immediately.
 ///
-/// Calling cancel is ineffective in NPDispatchScheduleThrottle because it executes immediately (from a timeline perspective)
+/// `cancel` does nothing for a throttle: by the time it could be called, the callback has already
+/// been dispatched, or it was dropped.
 ///
 /// - Parameters:
-///   - delayInSeconds: The minimum delay (in seconds) between allowed callback executions.
-///                     Subsequent calls to the returned NPScheduleWork within this delay window will be ignored.
-///   - on: The dispatch queue on which to execute the callback function.
-///   - callback: The function to execute when the throttling condition is met.
-NP_EXTERN NPScheduleWork NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback);
+///   - delayInSeconds: The minimum delay (in seconds) between two callback executions. Calls to
+///                     `resume` within this window are ignored.
+///   - on: The dispatch queue on which to execute the callback.
+///   - callback: The callback to execute when the throttling condition is met.
+///   - work: Out-parameter, filled in with the handle. Must not be NULL. Release it with
+///           NPScheduleWorkRelease.
+NP_EXTERN void NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work);
 
-/// Schedules a debounced execution of a callback function on a specified dispatch queue.
+/// Schedules a debounced execution of a callback on a dispatch queue.
 ///
-/// Debouncing delays the callback execution until after the specified delay has elapsed
-/// without receiving new calls to the returned NPScheduleWork function.
+/// Debouncing delays the callback until `delayInSeconds` have passed with no further call to
+/// `resume`. A burst of calls therefore collapses into a single execution.
 ///
-/// Calling cancel is effective in NPDispatchScheduleDebounce because its tasks are always delayed.
+/// `cancel` is effective for a debounce, since its work is always delayed: it calls off a pending
+/// execution. A later `resume` starts a new one.
 ///
 /// - Parameters:
-///   - delayInSeconds: The debounce delay (in seconds) that must pass without new calls
-///                     to the returned NPScheduleWork before the callback is executed.
-///   - leewayInSeconds: The allowed leeway (in seconds) for timer execution to optimize
-///                     power consumption and performance. A positive value indicates
-///                     the system may delay timer firing within this tolerance.
-///   - on: The dispatch queue on which to execute the callback function.
-///   - callback: The function to execute when the debounce condition is met.
-NP_EXTERN NPScheduleWork NPDispatchScheduleDeboundce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback);
+///   - delayInSeconds: The quiet period (in seconds) that must pass after the last `resume` before
+///                     the callback runs.
+///   - leewayInSeconds: The tolerance (in seconds) the system may add to the timer to save power.
+///   - on: The dispatch queue on which to execute the callback.
+///   - callback: The callback to execute when the debounce condition is met.
+///   - work: Out-parameter, filled in with the handle. Must not be NULL. Release it with
+///           NPScheduleWorkRelease.
+NP_EXTERN void NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work);
+
+/// Releases the blocks held by a schedule handle and clears it. Releasing a NULL or already-released
+/// handle does nothing, and neither `resume` nor `cancel` may be called afterwards.
+///
+/// This does not call off a debounce that is already pending: call `cancel` first if the callback
+/// must not run.
+NP_EXTERN void NPScheduleWorkRelease(NPScheduleWork *work);
 
 NP_CEXTERN_END
 

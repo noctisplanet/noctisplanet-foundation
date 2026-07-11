@@ -63,6 +63,15 @@
 #define NP_BLOCK(TYPE) __block TYPE
 #define NP_WEAK(TYPE) __weak TYPE
 
+// Keeps a retainable field out of ARC's hands, so that the struct holding it stays trivially
+// copyable whether or not the including translation unit compiles under ARC. Ownership of such a
+// field is manual: whoever fills it in says how it is released.
+#if defined(__has_feature) && __has_feature(objc_arc)
+#define NP_UNRETAINED __unsafe_unretained
+#else
+#define NP_UNRETAINED
+#endif
+
 #if defined(__cplusplus)
 #define NP_CEXTERN_BEGIN extern "C" {
 #define NP_CEXTERN_END }

@@ -2,7 +2,7 @@
 //  NPScheduleWorkTests.m
 //  npfoundation
 //
-//  Created by Jonathan Lee on 9/17/25.
+//  Created by Jonathan Lee on 8/14/25.
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -32,76 +32,147 @@
 
 @implementation NPScheduleWorkTests
 
+/// Waits out `seconds` so that any work still in flight has a chance to run before an assertion.
+- (void)settleFor:(double)seconds {
+    XCTestExpectation *settled = [self expectationWithDescription:@"settled"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [settled fulfill];
+    });
+    [self waitForExpectations:@[settled] timeout:seconds + 5];
+}
+
+#pragma mark - Throttle
+
 - (void)testThrottleFiresOncePerWindow {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled"];
-    NPScheduleWork scheduleWork = NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWork work;
+    NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    });
-    scheduleWork.resume();
-    scheduleWork.resume();
-    scheduleWork.resume();
-    scheduleWork.resume();
+    }, &work);
+
+    work.resume();
+    work.resume();
+    work.resume();
+    work.resume();
     [self waitForExpectations:@[expectation] timeout:5];
 
     // The window is still open, so the burst above must have produced exactly one call.
     XCTAssertEqual(count, 1);
+    NPScheduleWorkRelease(&work);
 }
 
 - (void)testThrottleFiresAgainAfterTheWindow {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"throttled twice"];
     expectation.expectedFulfillmentCount = 2;
-    NPScheduleWork scheduleWork = NPDispatchScheduleThrottle(0.2, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWork work;
+    NPDispatchScheduleThrottle(0.2, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    });
-    scheduleWork.resume();
-    scheduleWork.resume();
+    }, &work);
+
+    work.resume();
+    work.resume();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        scheduleWork.resume();
+        work.resume();
     });
     [self waitForExpectations:@[expectation] timeout:5];
     XCTAssertEqual(count, 2);
+    NPScheduleWorkRelease(&work);
 }
+
+#pragma mark - Debounce
 
 - (void)testDebounceFiresOnceForABurst {
     NP_BLOCK(int) count = 0;
     XCTestExpectation *expectation = [self expectationWithDescription:@"debounced"];
-    NPScheduleWork scheduleWork = NPDispatchScheduleDeboundce(0.2, 0.05, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWork work;
+    NPDispatchScheduleDebounce(0.2, 0.05, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
         [expectation fulfill];
-    });
+    }, &work);
+
     for (int idx = 0; idx < 8; idx ++) {
-        scheduleWork.resume();
+        work.resume();
     }
     [self waitForExpectations:@[expectation] timeout:5];
 
-    // Give any stray timer from the burst a chance to fire before checking the count: a debounce
-    // must collapse the whole burst into a single call.
-    XCTestExpectation *settled = [self expectationWithDescription:@"settled"];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [settled fulfill];
-    });
-    [self waitForExpectations:@[settled] timeout:5];
+    // A debounce must collapse the whole burst into a single call, so give any stray timer from the
+    // burst a chance to fire before checking the count.
+    [self settleFor:0.5];
     XCTAssertEqual(count, 1);
+    NPScheduleWorkRelease(&work);
 }
 
 - (void)testDebounceCancel {
     NP_BLOCK(int) count = 0;
-    NPScheduleWork scheduleWork = NPDispatchScheduleDeboundce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+    NPScheduleWork work;
+    NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         count += 1;
-    });
-    scheduleWork.resume();
-    scheduleWork.cancel();
+    }, &work);
 
-    XCTestExpectation *settled = [self expectationWithDescription:@"settled"];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [settled fulfill];
-    });
-    [self waitForExpectations:@[settled] timeout:5];
+    work.resume();
+    work.cancel();
+    [self settleFor:0.6];
     XCTAssertEqual(count, 0);
+    NPScheduleWorkRelease(&work);
+}
+
+- (void)testDebounceResumesAfterCancel {
+    NP_BLOCK(int) count = 0;
+    XCTestExpectation *expectation = [self expectationWithDescription:@"debounced"];
+    NPScheduleWork work;
+    NPDispatchScheduleDebounce(0.2, 0, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        count += 1;
+        [expectation fulfill];
+    }, &work);
+
+    work.resume();
+    work.cancel();
+    work.resume();
+    [self waitForExpectations:@[expectation] timeout:5];
+    XCTAssertEqual(count, 1);
+    NPScheduleWorkRelease(&work);
+}
+
+#pragma mark - Lifetime
+
+- (void)testReleaseClearsTheHandle {
+    NPScheduleWork work;
+    NPDispatchScheduleThrottle(1, dispatch_get_main_queue(), ^{}, &work);
+    XCTAssertTrue(work.resume != NULL);
+    XCTAssertTrue(work.cancel != NULL);
+
+    NPScheduleWorkRelease(&work);
+    XCTAssertTrue(work.resume == NULL);
+    XCTAssertTrue(work.cancel == NULL);
+
+    // Releasing an already-released or NULL handle is a no-op rather than a double free.
+    NPScheduleWorkRelease(&work);
+    NPScheduleWorkRelease(NULL);
+}
+
+/// The callback must stay alive as long as the handle does, even after the frame that created it
+/// has returned.
+- (void)testHandleOutlivesTheSchedulingFrame {
+    NP_BLOCK(int) count = 0;
+    XCTestExpectation *expectation = [self expectationWithDescription:@"throttled"];
+    NPScheduleWork work;
+    [self scheduleInto:&work counter:&count expectation:expectation];
+
+    work.resume();
+    [self waitForExpectations:@[expectation] timeout:5];
+    XCTAssertEqual(count, 1);
+    NPScheduleWorkRelease(&work);
+}
+
+- (void)scheduleInto:(NPScheduleWork *)work counter:(int *)counter expectation:(XCTestExpectation *)expectation {
+    NPDispatchScheduleThrottle(1, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        *counter += 1;
+        [expectation fulfill];
+    }, work);
 }
 
 @end

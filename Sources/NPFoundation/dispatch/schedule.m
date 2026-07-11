@@ -33,7 +33,35 @@ NP_STATIC_INLINE double monotonicSeconds(void) {
     return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC) / (double)NSEC_PER_SEC;
 }
 
-NPScheduleWork NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback) {
+/// Copies `block` to the heap and hands the ownership of that copy to the caller, since the fields
+/// of NPScheduleWork are outside ARC's reach. NPScheduleWorkRelease gives it back.
+NP_STATIC_INLINE dispatch_block_t retainedBlock(dispatch_block_t block) {
+    return (__bridge dispatch_block_t)(__bridge_retained void *)[block copy];
+}
+
+/// Hands an owned block back to ARC, which releases it at the end of this scope.
+NP_STATIC_INLINE void releaseBlock(dispatch_block_t block) {
+    if (block == NULL) {
+        return;
+    }
+    dispatch_block_t owned = (__bridge_transfer dispatch_block_t)(__bridge void *)block;
+    (void)owned;
+}
+
+void NPScheduleWorkRelease(NPScheduleWork *work) {
+    if (work == NULL) {
+        return;
+    }
+    releaseBlock(work->resume);
+    releaseBlock(work->cancel);
+    work->resume = NULL;
+    work->cancel = NULL;
+}
+
+void NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work) {
+    if (work == NULL) {
+        return;
+    }
     NP_BLOCK(double) previous = 0;
     NP_BLOCK(bool) hasFired = false;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
@@ -46,19 +74,19 @@ NPScheduleWork NPDispatchScheduleThrottle(double delayInSeconds, dispatch_queue_
             dispatch_async(on, callback);
         }
     };
-    NPScheduleWork scheduleWork = {
-        .resume = ^{
-            dispatch_async(queue, resume);
-        },
-        .cancel = ^{
-            // Nothing to cancel: the throttled callback has already been dispatched by the time
-            // resume() returns, or it was dropped.
-        },
-    };
-    return scheduleWork;
+    work->resume = retainedBlock(^{
+        dispatch_async(queue, resume);
+    });
+    work->cancel = retainedBlock(^{
+        // Nothing to cancel: the throttled callback has already been dispatched by the time
+        // resume() returns, or it was dropped.
+    });
 }
 
-NPScheduleWork NPDispatchScheduleDeboundce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback) {
+void NPDispatchScheduleDebounce(double delayInSeconds, double leewayInSeconds, dispatch_queue_t on, dispatch_block_t callback, NPScheduleWork *work) {
+    if (work == NULL) {
+        return;
+    }
     NP_BLOCK(bool) canceled = false;
     NP_BLOCK(uint64_t) generation = 0;
     dispatch_queue_attr_t attribute = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
@@ -87,13 +115,10 @@ NPScheduleWork NPDispatchScheduleDeboundce(double delayInSeconds, double leewayI
     dispatch_block_t cancel = ^{
         canceled = true;
     };
-    NPScheduleWork scheduleWork = {
-        .resume = ^{
-            dispatch_async(queue, resume);
-        },
-        .cancel = ^{
-            dispatch_async(queue, cancel);
-        },
-    };
-    return scheduleWork;
+    work->resume = retainedBlock(^{
+        dispatch_async(queue, resume);
+    });
+    work->cancel = retainedBlock(^{
+        dispatch_async(queue, cancel);
+    });
 }
