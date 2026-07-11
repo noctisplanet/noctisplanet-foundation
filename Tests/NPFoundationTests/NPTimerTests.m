@@ -32,12 +32,44 @@
 
 @implementation NPTimerTests
 
-- (void)setUp {
-    // Put setup code here. This method is called before the invocation of each test method in the class.
+- (void)testCancelWhileSuspended {
+    // Cancelling a suspended source leaves it suspended forever unless the suspend is balanced, so
+    // the source is never reclaimed and its event handler is never released. The released handler
+    // is what this observes.
+    XCTestExpectation *released = [self expectationWithDescription:@"handler released"];
+    NSObject *sentinel = [NSObject new];
+    NPAttachDeallocationHandler(sentinel, ^{
+        [released fulfill];
+    });
+
+    @autoreleasepool {
+        NPTimer timer = NPDispatchTimer(nil, 60, 0, ^{
+            (void)sentinel;
+        });
+        NPDispatchTimerSuspend(timer);
+        NPDispatchTimerCancel(timer);
+        timer = nil;
+    }
+    sentinel = nil;
+
+    [self waitForExpectations:@[released] timeout:5];
 }
 
-- (void)tearDown {
-    // Put teardown code here. This method is called after the invocation of each test method in the class.
+- (void)testCancelStopsTheTimer {
+    NP_BLOCK(int) count = 0;
+    NPTimer timer = NPDispatchTimer(nil, 0.1, 0, ^{
+        count += 1;
+    });
+    NPDispatchTimerCancel(timer);
+
+    XCTestExpectation *settled = [self expectationWithDescription:@"settled"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [settled fulfill];
+    });
+    [self waitForExpectations:@[settled] timeout:5];
+
+    // The timer fires once immediately on activation, then must stop.
+    XCTAssertLessThanOrEqual(count, 1);
 }
 
 - (void)testCreate {

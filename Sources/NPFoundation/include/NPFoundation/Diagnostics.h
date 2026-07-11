@@ -29,33 +29,40 @@
 #ifdef __cplusplus
 
 #include <NPFoundation/Definitions.h>
-#include <stdarg.h>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
-#include <set>
+#include <vector>
 
 NP_NAMESPACE_BEGIN(NP)
 
+/// Collects leveled diagnostic messages, optionally echoing them to a stream, and remembers whether
+/// any of them was an error.
+///
+/// Only messages logged at `Behavior::error` are retained; the rest are echoed and dropped. This is
+/// the error channel the Sys wrappers report through: a caller can run a sequence of calls and check
+/// `hasError()` once at the end instead of testing each one.
 class Diagnostics {
-    
+
 public:
-    
+
     enum class Behavior {
         debug, info, warning, error
     };
-    
+
     struct Message {
         Behavior behavior;
         std::string text;
     };
-    
+
 private:
-    
+
     FILE *stream;
-    
-    const std::string prefix;
-    
+
+    std::string prefix;
+
     std::vector<Message> errors;
-    
+
 public:
     
     Diagnostics(FILE *stream = nullptr);
@@ -79,11 +86,15 @@ public:
 public:
     
     bool hasError() const;
-    
+
     bool noError() const;
-    
+
+    /// The errors collected so far, in the order they were logged.
+    const std::vector<Message> & getErrors() const;
+
     void clearError();
-    
+
+    /// Prints every collected error and aborts the process if there is one. Does nothing otherwise.
     void assertNoError() const;
 };
 

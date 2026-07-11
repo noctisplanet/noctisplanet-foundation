@@ -74,14 +74,23 @@
 
 - (void)cancel:(NPTimer)timer {
     bool isExecutable = false;
+    bool wasSuspended = false;
     os_unfair_lock_lock(&_unfair_lock);
     if (!_isCancelled) {
         _isCancelled = true;
+        wasSuspended = _isSuspended;
+        _isSuspended = false;
         isExecutable = true;
     }
     os_unfair_lock_unlock(&_unfair_lock);
     if (isExecutable) {
         dispatch_source_cancel(timer);
+        // Releasing a suspended source traps in libdispatch ("BUG IN CLIENT OF LIBDISPATCH: Release
+        // of a suspended object"), and a suspended source never processes its cancellation anyway.
+        // Balance the suspend so the cancellation can run and the source can be reclaimed.
+        if (wasSuspended) {
+            dispatch_resume(timer);
+        }
     }
 }
 
@@ -93,7 +102,6 @@ NP_STATIC_INLINE void setAssociated(NPTimer timer) {
 }
 
 NP_STATIC_INLINE _NPTimer * associated(NPTimer timer) {
-    id value = objc_getAssociatedObject(timer, &gTimerKey);
     return objc_getAssociatedObject(timer, &gTimerKey);
 }
 

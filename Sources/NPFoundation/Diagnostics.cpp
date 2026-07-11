@@ -30,11 +30,11 @@
 NP_NAMESPACE_BEGIN(NP)
 
 Diagnostics::Diagnostics(FILE *stream) : stream(stream) {
-    
+
 }
 
-Diagnostics::Diagnostics(const std::string &prefix, FILE *stream) : prefix(prefix), stream(stream) {
-    
+Diagnostics::Diagnostics(const std::string &prefix, FILE *stream) : stream(stream), prefix(prefix) {
+
 }
 
 void Diagnostics::append(const Message &message) {
@@ -42,11 +42,10 @@ void Diagnostics::append(const Message &message) {
         if (!prefix.empty()) {
             ::fprintf(stream, "[%s] ", prefix.c_str());
         }
-        ::fprintf(stream, "%s", message.text.c_str());
-        ::fprintf(stream, "\n");
+        ::fprintf(stream, "%s\n", message.text.c_str());
     }
     if (message.behavior == Behavior::error) {
-        errors.insert(errors.end(), message);
+        errors.push_back(message);
     }
 }
 
@@ -99,14 +98,27 @@ bool Diagnostics::noError() const {
     return errors.empty();
 }
 
+const std::vector<Diagnostics::Message> & Diagnostics::getErrors() const {
+    return errors;
+}
+
 void Diagnostics::clearError() {
-    return errors.clear();
+    errors.clear();
 }
 
 void Diagnostics::assertNoError() const {
-    if (hasError()) {
-        
+    if (noError()) {
+        return;
     }
+    FILE *out = stream != nullptr ? stream : stderr;
+    for (const Message &message : errors) {
+        if (!prefix.empty()) {
+            ::fprintf(out, "[%s] ", prefix.c_str());
+        }
+        ::fprintf(out, "assertNoError: %s\n", message.text.c_str());
+    }
+    ::fflush(out);
+    ::abort();
 }
 
 NP_NAMESPACE_END

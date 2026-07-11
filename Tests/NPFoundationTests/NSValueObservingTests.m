@@ -32,15 +32,6 @@
 
 @implementation NSValueObservingTests
 
-- (void)setUp {
-    
-    // Put setup code here. This method is called before the invocation of each test method in the class.
-}
-
-- (void)tearDown {
-    // Put teardown code here. This method is called after the invocation of each test method in the class.
-}
-
 - (void)testAttachDeallocationHandler {
     __block bool success = false;
     {
@@ -50,6 +41,38 @@
         });
     }
     XCTAssertTrue(success);
+}
+
+/// The handler must survive the frame that attached it: the block literal starts out on the stack,
+/// so it has to be copied to the heap when it is stored.
+- (void)testHandlerOutlivesTheAttachingFrame {
+    __block bool success = false;
+    NSObject *observable = [NSObject new];
+    [self attachTo:observable flag:&success];
+
+    XCTAssertFalse(success);
+    observable = nil;
+    XCTAssertTrue(success);
+}
+
+- (void)attachTo:(NSObject *)observable flag:(bool *)flag {
+    char padding[256];
+    memset(padding, 0xAB, sizeof(padding));
+    NPAttachDeallocationHandler(observable, ^{
+        *flag = true;
+    });
+    (void)padding;
+}
+
+- (void)testMultipleHandlers {
+    __block int count = 0;
+    {
+        NSObject *observable = [NSObject new];
+        NPAttachDeallocationHandler(observable, ^{ count += 1; });
+        NPAttachDeallocationHandler(observable, ^{ count += 1; });
+        NPAttachDeallocationHandler(observable, ^{ count += 1; });
+    }
+    XCTAssertEqual(count, 3);
 }
 
 @end

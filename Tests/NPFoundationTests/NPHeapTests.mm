@@ -25,23 +25,23 @@
 
 #import <XCTest/XCTest.h>
 #import <NPFoundation/NPFoundation.h>
-#import <XCTest/XCTest.h>
 
-@interface NPHeapTests : XCTestCase {
-    std::vector<int> _list;
-}
+@interface NPHeapTests : XCTestCase
 
 @end
 
 @implementation NPHeapTests
 
-- (void)setUp {
-    size_t size = 1000000;
-    if (_list.size() < size) {
-        for (int idx = 0; idx < size; idx ++) {
-            _list.push_back(arc4random_uniform((uint32_t)size) - 50000);
-        }
+/// A shuffled list spanning negative and positive values. Built on demand: only the heapify tests
+/// need it, and the push/pop tests were paying for a million elements they never looked at.
+- (std::vector<int32_t>)randomList {
+    const int32_t count = 200000;
+    std::vector<int32_t> list;
+    list.reserve(count);
+    for (int32_t idx = 0; idx < count; idx ++) {
+        list.push_back((int32_t)arc4random_uniform((uint32_t)count) - count / 2);
     }
+    return list;
 }
 
 - (void)testMinHeapPushAndPop {
@@ -85,8 +85,9 @@
 }
 
 - (void)testBuildMinHeap {
-    NP::Heap<int32_t> heap{_list, NP::HeapType::min};
-    XCTAssertEqual(heap.size(), _list.size());
+    std::vector<int32_t> list = [self randomList];
+    NP::Heap<int32_t> heap{list, NP::HeapType::min};
+    XCTAssertEqual(heap.size(), list.size());
     int32_t cur = INT32_MIN;
     while (heap.size() > 0) {
         const auto element = heap.pop();
@@ -97,8 +98,9 @@
 }
 
 - (void)testBuildMaxHeap {
-    NP::Heap<int32_t> heap{_list, NP::HeapType::max};
-    XCTAssertEqual(heap.size(), _list.size());
+    std::vector<int32_t> list = [self randomList];
+    NP::Heap<int32_t> heap{list, NP::HeapType::max};
+    XCTAssertEqual(heap.size(), list.size());
     int32_t cur = INT32_MAX;
     while (heap.size() > 0) {
         const auto element = heap.pop();
@@ -106,6 +108,46 @@
         cur = element.value();
     }
     XCTAssertEqual(heap.size(), 0);
+}
+
+- (void)testEmptyHeap {
+    NP::Heap<int> heap;
+    XCTAssertTrue(heap.empty());
+    XCTAssertEqual(heap.size(), 0);
+    XCTAssertFalse(heap.top().has_value());
+    XCTAssertFalse(heap.pop().has_value());
+    XCTAssertEqual(heap.getType(), NP::HeapType::max);
+}
+
+- (void)testBuildFromEmptyList {
+    NP::Heap<int> heap{std::vector<int>{}, NP::HeapType::min};
+    XCTAssertTrue(heap.empty());
+    XCTAssertFalse(heap.pop().has_value());
+}
+
+- (void)testDuplicatesAndClear {
+    NP::Heap<int> heap{std::vector<int>{4, 4, 1, 4, 1}, NP::HeapType::min};
+    XCTAssertEqual(heap.pop(), 1);
+    XCTAssertEqual(heap.pop(), 1);
+    XCTAssertEqual(heap.pop(), 4);
+    heap.clear();
+    XCTAssertTrue(heap.empty());
+}
+
+/// push() must take lvalues too, not just temporaries, and must move what it is given rather than
+/// copying it.
+- (void)testPushMovesAndAcceptsLvalues {
+    NP::Heap<std::string> heap{NP::HeapType::min};
+    std::string lvalue = "b";
+    heap.push(lvalue);
+    XCTAssertEqual(lvalue, "b");
+
+    std::string movable(64, 'a');
+    heap.push(std::move(movable));
+    XCTAssertTrue(movable.empty());
+
+    XCTAssertEqual(heap.pop().value(), std::string(64, 'a'));
+    XCTAssertEqual(heap.pop().value(), "b");
 }
 
 @end

@@ -24,6 +24,9 @@
 //
 
 #include <NPFoundation/sys.h>
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -44,7 +47,12 @@ int open(Diagnostics &diag, const char *path, int flag, int other) noexcept {
 }
 
 void close(Diagnostics &diag, int fd) noexcept {
-    ::close(fd);
+    // close() must not be retried on EINTR: the descriptor is already gone, and retrying could
+    // close a descriptor another thread has since opened with the same number.
+    if (::close(fd) != 0 && errno != EINTR) {
+        int err = errno;
+        diag.error("close() failed with errno=%d, %s", err, strerror(err));
+    }
 }
 
 void stat(Diagnostics &diag, const char *path, struct ::stat *buf) noexcept {
@@ -93,23 +101,28 @@ void ftruncate(Diagnostics &diag, int fd, size_t size) noexcept {
 
 void cwd(Diagnostics &diag, char *output) noexcept {
     int fd = open(diag, ".", O_RDONLY | O_DIRECTORY, 0);
-    if (diag.hasError()) {
+    if (fd < 0) {
         return;
     }
     if (::fcntl(fd, F_GETPATH, output) != 0) {
-        diag.error("fcntl(F_GETPATH) failed with errno=%d, %s", errno, strerror(errno));
+        int err = errno;
+        diag.error("fcntl(F_GETPATH) failed with errno=%d, %s", err, strerror(err));
     }
     close(diag, fd);
 }
 
 void realpath(Diagnostics &diag, const char *input, char *output) noexcept {
-    int fd = open(diag, input, O_RDONLY | O_DIRECTORY, 0);
-    if (diag.hasError()) {
+    // No O_DIRECTORY here: realpath() has to resolve regular files too, and F_GETPATH works on any
+    // descriptor.
+    int fd = open(diag, input, O_RDONLY, 0);
+    if (fd < 0) {
         return;
     }
     if (::fcntl(fd, F_GETPATH, output) != 0) {
-        diag.error("fcntl(F_GETPATH) failed with errno=%d, %s", errno, strerror(errno));
+        int err = errno;
+        diag.error("fcntl(F_GETPATH) failed with errno=%d, %s", err, strerror(err));
     }
+    close(diag, fd);
 }
 
 bool dirExists(const char *path) noexcept {
@@ -132,80 +145,103 @@ bool fileExists(const char *path) noexcept {
     return S_ISREG(statbuf.st_mode);;
 }
 
+/// Resolves `path` into `realerPath` without disturbing the caller's diagnostics: a buffer that
+/// cannot be resolved is left empty rather than filled with stack garbage.
+NP_STATIC_INLINE void resolveRealerPath(const char *path, char *realerPath) noexcept {
+    if (realerPath == nullptr) {
+        return;
+    }
+    realerPath[0] = '\0';
+    Diagnostics quiet{nullptr};
+    realpath(quiet, path, realerPath);
+}
+
 const void * mmapReadOnly(Diagnostics &diag, const char *path, size_t *size, char *realerPath) noexcept {
     struct stat statbuf;
     stat(diag, path, &statbuf);
     if (diag.hasError()) {
         return nullptr;
     }
-    if (statbuf.st_size == 0) {
+    if (statbuf.st_size <= 0) {
+        // Nothing to map. mmap() of a zero-length range fails with EINVAL, so report it as an
+        // empty mapping instead of an error.
+        if (size != nullptr) {
+            *size = 0;
+        }
         return nullptr;
     }
-    
+
     int fd = open(diag, path, O_RDONLY, 0);
-    if (diag.hasError()) {
+    if (fd < 0) {
         return nullptr;
     }
-    if (size != nullptr) {
-        *size = (size_t)statbuf.st_size;
-    }
-    
-    const void* result = ::mmap(nullptr, (size_t)statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    size_t mappedSize = (size_t)statbuf.st_size;
+    const void *result = ::mmap(nullptr, mappedSize, PROT_READ, MAP_PRIVATE, fd, 0);
     if (result == MAP_FAILED) {
-        diag.error("mmap(size=0x%0lX) failed with errno=%d", (size_t)statbuf.st_size, errno);
+        int err = errno;
+        diag.error("mmap(size=0x%0lX) failed with errno=%d, %s", mappedSize, err, strerror(err));
         close(diag, fd);
-        return MAP_FAILED;
+        return nullptr;
     }
-    if (realerPath != nullptr) {
-        Diagnostics diag{nullptr};
-        realpath(diag, path, realerPath);
+
+    if (size != nullptr) {
+        *size = mappedSize;
     }
+    resolveRealerPath(path, realerPath);
     close(diag, fd);
     return result;
 }
 
 void withMmapReadOnly(Diagnostics &diag, const char *path, void (^handler)(const void *mapping, size_t size, const char* realerPath)) noexcept {
-    size_t mappedSize;
-    char realerPath[PATH_MAX];
-    if (const void *mapping = mmapReadOnly(diag, path, &mappedSize, realerPath)) {
-        handler(mapping, mappedSize, realerPath);
-        munmap(diag, (void *)mapping, mappedSize);
+    size_t mappedSize = 0;
+    char realerPath[PATH_MAX] = {0};
+    const void *mapping = mmapReadOnly(diag, path, &mappedSize, realerPath);
+    if (mapping == nullptr) {
+        return;
     }
+    handler(mapping, mappedSize, realerPath);
+    munmap(diag, (void *)mapping, mappedSize);
 }
 
 void * mmapReadWrite(Diagnostics &diag, const char *path, size_t *size, char *realerPath) noexcept {
     int fd = open(diag, path, O_RDWR | O_CREAT, 0666);
-    if (diag.hasError()) {
+    if (fd < 0) {
         return nullptr;
     }
-    
+
     struct stat statbuf;
     stat(diag, path, &statbuf);
     if (diag.hasError()) {
         close(diag, fd);
         return nullptr;
     }
-    
-    size_t fsize = statbuf.st_size;
-    if (fsize <= 0) {
-        fsize = 1024 * 4;
-        ftruncate(diag, fd, fsize);
+
+    size_t mappedSize = (size_t)statbuf.st_size;
+    if (statbuf.st_size <= 0) {
+        // mmap() cannot map an empty file, so give a freshly created one a page to live in.
+        mappedSize = 1024 * 4;
+        ftruncate(diag, fd, mappedSize);
         if (diag.hasError()) {
             close(diag, fd);
             return nullptr;
         }
     }
-    
-    void* result = ::mmap(nullptr, fsize, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+
+    // MAP_SHARED, not MAP_PRIVATE: a private mapping is copy-on-write, so nothing written through
+    // it would ever reach the file.
+    void *result = ::mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (result == MAP_FAILED) {
-        diag.error("mmap(size=0x%0lX) failed with errno=%d", (size_t)statbuf.st_size, errno);
+        int err = errno;
+        diag.error("mmap(size=0x%0lX) failed with errno=%d, %s", mappedSize, err, strerror(err));
         close(diag, fd);
         return nullptr;
     }
-    if (realerPath != nullptr) {
-        Diagnostics diag{nullptr};
-        realpath(diag, path, realerPath);
+
+    if (size != nullptr) {
+        *size = mappedSize;
     }
+    resolveRealerPath(path, realerPath);
     close(diag, fd);
     return result;
 }

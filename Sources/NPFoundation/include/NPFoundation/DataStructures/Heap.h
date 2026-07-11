@@ -33,6 +33,10 @@
 #ifdef __cplusplus
 
 #include <NPFoundation/Definitions.h>
+#include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
 
 NP_NAMESPACE_BEGIN(NP)
 
@@ -40,59 +44,88 @@ enum class HeapType {
     max, min
 };
 
+/// A binary heap over a contiguous vector.
+///
+/// `top()` and `pop()` yield the largest element by `operator<` for HeapType::max, and the smallest
+/// for HeapType::min. Building from an existing vector heapifies it in O(n) rather than pushing
+/// element by element.
+///
+/// T must be movable and comparable with `operator<` / `operator>`.
 template<class T>
 class Heap {
-    
-private:
-    
-    std::vector<T> storage;
-    
+
 public:
-    
+
     typedef int64_t Index;
-    
-    const HeapType type;
-    
-    Heap(HeapType type = HeapType::max) : type(type) {
-        
+
+private:
+
+    std::vector<T> storage;
+
+    HeapType type;
+
+public:
+
+    explicit Heap(HeapType type = HeapType::max) : type(type) {
+
     }
-    
-    Heap(const std::vector<T> &list, HeapType type = HeapType::max) : storage(list), type(type) {
-        Index size = storage.size();
-        Index idx = size / 2 - 1;
-        for (; idx >= 0; idx --) {
+
+    explicit Heap(const std::vector<T> &list, HeapType type = HeapType::max) : storage(list), type(type) {
+        this->build();
+    }
+
+    explicit Heap(std::vector<T> &&list, HeapType type = HeapType::max) : storage(std::move(list)), type(type) {
+        this->build();
+    }
+
+public:
+
+    HeapType getType() const {
+        return this->type;
+    }
+
+    Index size() const {
+        return (Index)storage.size();
+    }
+
+    bool empty() const {
+        return storage.empty();
+    }
+
+    void clear() {
+        storage.clear();
+    }
+
+    void reserve(Index capacity) {
+        if (capacity > 0) {
+            storage.reserve((size_t)capacity);
+        }
+    }
+
+    std::optional<T> top() const {
+        if (storage.empty()) {
+            return std::nullopt;
+        }
+        return storage[0];
+    }
+
+private:
+
+    void build() {
+        Index size = this->size();
+        for (Index idx = size / 2 - 1; idx >= 0; idx --) {
             heapify(idx, size);
         }
     }
-    
-public:
-    
-    Index size() const {
-        return storage.size();
-    }
-    
-    bool empty() const {
-        return storage.size() == 0;
-    }
-    
-    const std::optional<T> top() const {
-        if (storage.size() > 0) {
-            return storage[0];
-        } else {
-            return std::nullopt;
-        }
-    }
-    
-private:
-    
-    bool lessThan(Index lhs, Index rhs) {
+
+    bool lessThan(Index lhs, Index rhs) const {
         return storage[lhs] < storage[rhs];
     }
-    
-    bool greaterThan(Index lhs, Index rhs) {
+
+    bool greaterThan(Index lhs, Index rhs) const {
         return storage[lhs] > storage[rhs];
     }
-    
+
     Index parentIndex(Index idx) const {
         return (idx - 1) / 2;
     }
@@ -111,14 +144,14 @@ private:
         std::swap(storage[lhs], storage[rhs]);
     }
     
-    bool comparator(Index lhs, Index rhs) {
+    bool comparator(Index lhs, Index rhs) const {
         if (type == HeapType::min) {
             return lessThan(lhs, rhs);
         } else {
             return greaterThan(lhs, rhs);
         }
     }
-    
+
     void heapify(Index idx, Index size) {
         Index left = leftIndex(idx);
         while (left < size) {
@@ -142,35 +175,43 @@ private:
         }
     }
     
-public:
-    
-    void push(T && value) {
-        Index idx = storage.size();
-        storage.push_back(value);
+    /// Restores the heap property upwards from `idx`, which is where a freshly appended element sits.
+    void siftUp(Index idx) {
         while (idx > 0) {
             Index parent = parentIndex(idx);
-            if (comparator(idx, parent)) {
-                std::swap(storage[idx], storage[parent]);
-                idx = parent;
-            } else {
+            if (!comparator(idx, parent)) {
                 break;
             }
+            swap(idx, parent);
+            idx = parent;
         }
     }
-    
-    const std::optional<T> pop() {
-        Index size = storage.size();
+
+public:
+
+    void push(const T &value) {
+        storage.push_back(value);
+        this->siftUp(this->size() - 1);
+    }
+
+    void push(T &&value) {
+        storage.push_back(std::move(value));
+        this->siftUp(this->size() - 1);
+    }
+
+    std::optional<T> pop() {
+        Index size = this->size();
         if (size < 1) {
             return std::nullopt;
         }
-        
+
         size -= 1;
         if (size > 0) {
             swap(0, size);
             heapify(0, size);
         }
-        
-        T value = storage[size];
+
+        std::optional<T> value{std::move(storage[size])};
         storage.pop_back();
         return value;
     }

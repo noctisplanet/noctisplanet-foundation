@@ -32,24 +32,32 @@
 
 @implementation NPFoundationTests
 
-- (void)setUp {
-    // Put setup code here. This method is called before the invocation of each test method in the class.
-}
+/// A smoke test over the umbrella header: every module has to be reachable through
+/// <NPFoundation/NPFoundation.h> alone, from a single Objective-C++ translation unit.
+- (void)testUmbrellaHeaderExposesEveryModule {
+    NP::Diagnostics diagnostics;
+    XCTAssertTrue(diagnostics.noError());
 
-- (void)tearDown {
-    // Put teardown code here. This method is called after the invocation of each test method in the class.
-}
+    NP::ByteBufferAllocator allocator;
+    NP::ByteBuffer buffer = allocator.buffer(16);
+    XCTAssertEqual(buffer.writeCString("np"), 2);
 
-- (void)testExample {
-    // This is an example of a functional test case.
-    // Use XCTAssert and related functions to verify your tests produce the correct results.
-}
+    auto backed = NP::CopyOnWriteMake<std::string>("np");
+    XCTAssertEqual(*backed.read(), "np");
 
-- (void)testPerformanceExample {
-    // This is an example of a performance test case.
-    [self measureBlock:^{
-        // Put the code you want to measure the time of here.
-    }];
+    NP::Heap<int> heap{NP::HeapType::min};
+    heap.push(1);
+    XCTAssertEqual(heap.top(), 1);
+
+    XCTAssertTrue(NP::Sys::dirExists("/"));
+
+    struct NPMachineContext context;
+    XCTAssertTrue(NPMachineContextGet(&context, pthread_self()));
+    XCTAssertTrue(NPMachineContextGetInstructionAddress(&context) != 0);
+
+    NPTimer timer = NPDispatchTimer(nil, 60, 0, ^{});
+    XCTAssertNotNil(timer);
+    NPDispatchTimerCancel(timer);
 }
 
 @end

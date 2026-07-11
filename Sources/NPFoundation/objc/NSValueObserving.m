@@ -51,7 +51,10 @@
 }
 
 - (void)addObserverHandler:(dispatch_block_t)handler {
-    [_handlers addObject:handler];
+    // -addObject: only retains, and retaining a stack block is a no-op. An ARC caller happens to
+    // hand us a heap block already, but a caller compiled without ARC does not, and the block would
+    // then dangle as soon as its frame returns. Copying is a plain retain for a heap block.
+    [_handlers addObject:[handler copy]];
 }
 
 @end

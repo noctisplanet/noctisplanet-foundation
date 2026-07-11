@@ -82,4 +82,49 @@ using namespace NP;
     XCTAssertTrue(diagnostics.noError());
 }
 
+- (void)testCollectsOnlyErrorsInOrder {
+    Diagnostics diagnostics;
+    diagnostics.debug("a debug line");
+    diagnostics.info("an info line");
+    diagnostics.warning("a warning line");
+    diagnostics.error("first error: %d", 1);
+    diagnostics.error("second error: %d", 2);
+
+    const auto &errors = diagnostics.getErrors();
+    XCTAssertEqual(errors.size(), 2);
+    XCTAssertEqual(errors[0].text, "first error: 1");
+    XCTAssertEqual(errors[1].text, "second error: 2");
+    XCTAssertTrue(errors[0].behavior == Diagnostics::Behavior::error);
+
+    diagnostics.clearError();
+    XCTAssertTrue(diagnostics.getErrors().empty());
+}
+
+/// Every level is echoed to the stream, with the prefix, whatever its behavior.
+- (void)testWritesEveryLevelToTheStream {
+    FILE *stream = ::tmpfile();
+    XCTAssertTrue(stream != nullptr);
+    {
+        Diagnostics diagnostics{"np", stream};
+        diagnostics.debug("d");
+        diagnostics.warning("w");
+        diagnostics.error("e");
+    }
+    ::rewind(stream);
+    char contents[256] = {0};
+    size_t read = ::fread(contents, 1, sizeof(contents) - 1, stream);
+    ::fclose(stream);
+
+    XCTAssertTrue(read > 0);
+    XCTAssertEqual(std::string(contents), std::string("[np] d\n[np] w\n[np] e\n"));
+}
+
+- (void)testLongMessageIsNotTruncated {
+    Diagnostics diagnostics;
+    std::string long_(4096, 'x');
+    diagnostics.error("%s", long_.c_str());
+    XCTAssertEqual(diagnostics.getErrors().size(), 1);
+    XCTAssertEqual(diagnostics.getErrors()[0].text.size(), 4096);
+}
+
 @end
